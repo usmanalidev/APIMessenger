@@ -190,11 +190,68 @@ export function convertOpenApi(doc) {
   }
 }
 
+function deriveFolderFromUrl(url = '') {
+  let raw = String(url || '').trim()
+  if (!raw) return 'General'
+  raw = raw.replace(/\{\{[^}]+\}\}/g, '')
+  try {
+    let pathname = raw
+    if (/^https?:\/\//i.test(raw)) {
+      pathname = new URL(raw).pathname
+    } else {
+      pathname = raw.split('?')[0]
+      // strip host-looking prefixes without protocol: host/path
+      if (!pathname.startsWith('/') && pathname.includes('/')) {
+        const parts = pathname.split('/')
+        // if first segment looks like domain, drop it
+        if (parts[0].includes('.')) pathname = `/${parts.slice(1).join('/')}`
+        else pathname = `/${pathname}`
+      }
+    }
+    const segments = pathname.split('/').filter(Boolean)
+    if (!segments.length) return 'General'
+    // Prefer first non-version segment (skip v1/v2/api if followed by more)
+    let idx = 0
+    if (['api', 'services', 'rest'].includes(segments[0].toLowerCase()) && segments.length > 1) idx = 1
+    if (/^v\d+$/i.test(segments[idx]) && segments.length > idx + 1) idx += 1
+    const name = segments[idx]
+      .replace(/[-_]+/g, ' ')
+      .replace(/\b\w/g, (c) => c.toUpperCase())
+    return name || 'General'
+  } catch {
+    return 'General'
+  }
+}
+
+function groupFlatRequestsIntoFolders(items = []) {
+  const hasFolders = items.some((item) => item.type === 'folder')
+  if (hasFolders || items.length < 8) return items
+
+  const folders = new Map()
+  for (const item of items) {
+    if (item.type !== 'request') continue
+    const folderName = deriveFolderFromUrl(item.url)
+    if (!folders.has(folderName)) {
+      folders.set(folderName, {
+        id: cryptoRandom(),
+        type: 'folder',
+        name: folderName,
+        children: [],
+      })
+    }
+    folders.get(folderName).children.push(item)
+  }
+
+  // Keep stable alphabetical folders; put tiny leftovers in General last if many singles
+  return [...folders.values()].sort((a, b) => a.name.localeCompare(b.name))
+}
+
 export function convertPostmanCollection(pm) {
   if (!pm || !pm.info) throw new Error('Missing Postman collection info')
 
   const mapItem = (item) => {
-    if (item.item) {
+    // Postman folders are objects with an `item` array (even if empty)
+    if (Array.isArray(item.item)) {
       return {
         id: cryptoRandom(),
         type: 'folder',
@@ -213,8 +270,8 @@ export function convertPostmanCollection(pm) {
       if (!url && Array.isArray(req.url.host)) {
         const protocol = req.url.protocol ? `${req.url.protocol}://` : 'http://'
         const host = req.url.host.join('.')
-        const path = Array.isArray(req.url.path) ? `/${req.url.path.join('/')}` : ''
-        url = `${protocol}${host}${path}`
+        const pathPart = Array.isArray(req.url.path) ? `/${req.url.path.join('/')}` : ''
+        url = `${protocol}${host}${pathPart}`
       }
       params = (req.url.query || []).map((q) =>
         createKv(q.key || '', q.value || '', !q.disabled)
@@ -296,6 +353,9 @@ export function convertPostmanCollection(pm) {
     }
   }
 
+  const mappedItems = (pm.item || []).map(mapItem)
+  const items = groupFlatRequestsIntoFolders(mappedItems)
+
   const environment =
     Array.isArray(pm.variable) && pm.variable.length
       ? {
@@ -308,7 +368,7 @@ export function convertPostmanCollection(pm) {
     collection: {
       name: pm.info.name || 'Imported Collection',
       description: pm.info.description || 'Imported from Postman',
-      items: (pm.item || []).map(mapItem),
+      items,
     },
     environment,
   }
