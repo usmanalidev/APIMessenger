@@ -158,16 +158,54 @@ export function exportCollectionFile(collection) {
 }
 
 export function toCurl(request) {
-  const lines = [`curl -X ${request.method || 'GET'} '${request.url || ''}'`]
+  const escapeShell = (value) => String(value ?? '').replace(/'/g, `'\\''`)
+  let url = request.url || ''
+
+  const enabledParams = (request.params || []).filter((param) => param.enabled && param.key)
+  if (enabledParams.length) {
+    const search = new URLSearchParams()
+    for (const param of enabledParams) search.append(param.key, param.value || '')
+    url += `${url.includes('?') ? '&' : '?'}${search.toString()}`
+  }
+
+  const lines = [`curl --request ${request.method || 'GET'} '${escapeShell(url)}'`]
+  const headerKeys = new Set()
   for (const h of request.headers || []) {
     if (!h.enabled || !h.key) continue
-    lines.push(`  -H '${h.key}: ${h.value || ''}'`)
+    headerKeys.add(h.key.toLowerCase())
+    lines.push(`  --header '${escapeShell(h.key)}: ${escapeShell(h.value)}'`)
   }
   if (request.auth?.type === 'bearer' && request.auth.token) {
-    lines.push(`  -H 'Authorization: Bearer ${request.auth.token}'`)
+    if (!headerKeys.has('authorization')) {
+      lines.push(`  --header 'Authorization: Bearer ${escapeShell(request.auth.token)}'`)
+    }
+  }
+  if (request.auth?.type === 'basic' && (request.auth.username || request.auth.password)) {
+    if (!headerKeys.has('authorization')) {
+      lines.push(`  --user '${escapeShell(request.auth.username)}:${escapeShell(request.auth.password)}'`)
+    }
+  }
+  if (request.auth?.type === 'apikey' && request.auth.key && request.auth.addTo !== 'query') {
+    if (!headerKeys.has(request.auth.key.toLowerCase())) {
+      lines.push(`  --header '${escapeShell(request.auth.key)}: ${escapeShell(request.auth.value)}'`)
+    }
   }
   if (request.body?.mode === 'raw' && request.body.raw) {
-    lines.push(`  -d '${request.body.raw.replace(/'/g, `'\\''`)}'`)
+    lines.push(`  --data-raw '${escapeShell(request.body.raw)}'`)
+  }
+  if (request.body?.mode === 'urlencoded') {
+    for (const field of request.body.urlencoded || []) {
+      if (field.enabled && field.key) {
+        lines.push(`  --data-urlencode '${escapeShell(field.key)}=${escapeShell(field.value)}'`)
+      }
+    }
+  }
+  if (request.body?.mode === 'formdata') {
+    for (const field of request.body.formData || []) {
+      if (field.enabled && field.key) {
+        lines.push(`  --form '${escapeShell(field.key)}=${escapeShell(field.value)}'`)
+      }
+    }
   }
   return lines.join(' \\\n')
 }

@@ -10,6 +10,13 @@ function headersToObject(headers = []) {
 }
 
 function buildUrl(rawUrl, params = []) {
+  if (!rawUrl || /\{\{[^}]+\}\}/.test(rawUrl)) {
+    const err = new Error(
+      `Unresolved URL variables in "${rawUrl || ''}". Set/activate an environment (e.g. baseUrl) and try again.`
+    )
+    err.status = 400
+    throw err
+  }
   const url = new URL(rawUrl)
   for (const p of params) {
     if (!p || !p.enabled || !p.key) continue

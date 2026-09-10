@@ -1,11 +1,11 @@
 @echo off
 setlocal
-title API Messenger
+title B Postman
 cd /d "%~dp0"
 
 echo.
-echo  API Messenger
-echo  -------------
+echo  B Postman
+echo  ---------
 echo.
 
 where node >nul 2>&1

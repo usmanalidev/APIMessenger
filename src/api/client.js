@@ -31,5 +31,15 @@ export const api = {
   clearHistory: () => request('/history', { method: 'DELETE' }),
 
   proxy: (body) => request('/proxy', { method: 'POST', body: JSON.stringify(body) }),
+  import: (body) => request('/import', { method: 'POST', body: JSON.stringify(body) }),
+  importFile: async (file) => {
+    const form = new FormData()
+    form.append('file', file)
+    const res = await fetch('/api/import/file', { method: 'POST', body: form })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error || res.statusText || 'Import failed')
+    return data
+  },
   importPostman: (body) => request('/import/postman', { method: 'POST', body: JSON.stringify(body) }),
+  importOpenApi: (body) => request('/import/openapi', { method: 'POST', body: JSON.stringify(body) }),
 }

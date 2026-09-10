@@ -226,7 +226,7 @@ export async function seedIfEmpty() {
   if (collections.length === 0) {
     await createCollection({
       name: 'Getting Started',
-      description: 'Sample requests to explore API Messenger',
+      description: 'Sample requests to explore B Postman',
       items: [
         {
           id: uuid(),
@@ -259,7 +259,7 @@ export async function seedIfEmpty() {
               body: {
                 mode: 'raw',
                 rawType: 'json',
-                raw: JSON.stringify({ title: 'API Messenger', body: 'Hello from local storage', userId: 1 }, null, 2),
+                raw: JSON.stringify({ title: 'B Postman', body: 'Hello from local storage', userId: 1 }, null, 2),
                 formData: [],
                 urlencoded: [],
               },
@@ -271,7 +271,7 @@ export async function seedIfEmpty() {
               method: 'GET',
               url: 'https://httpbin.org/get',
               params: [
-                { id: uuid(), key: 'from', value: 'api-messenger', enabled: true },
+                { id: uuid(), key: 'from', value: 'b-postman', enabled: true },
                 { id: uuid(), key: 'env', value: '{{baseEnv}}', enabled: true },
               ],
               headers: [],

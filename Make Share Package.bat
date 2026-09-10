@@ -1,6 +1,6 @@
 @echo off
 setlocal
-title Make API Messenger share package
+title Make B Postman share package
 cd /d "%~dp0"
 
 where node >nul 2>&1
@@ -10,9 +10,9 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo Building portable share package...
+echo Building portable B Postman share package...
 echo.
 call npm run package:share
 echo.
-echo Done. Look in the share\ folder.
+echo Done. Look in the share\ folder for B-Postman-portable.zip
 pause

@@ -17,11 +17,7 @@ import {
 
 function BrandMark() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" aria-hidden>
-      <path d="M3 12c5-8 13-8 18 0" stroke="#FF7A18" strokeWidth="2.2" strokeLinecap="round" />
-      <path d="M6 15c3.2-4.5 8.8-4.5 12 0" stroke="#1AA6A6" strokeWidth="2" strokeLinecap="round" />
-      <circle cx="12" cy="18" r="1.8" fill="#EFC66A" />
-    </svg>
+    <img src="/bupa-logo.png" alt="Bupa" />
   )
 }
 
@@ -35,6 +31,14 @@ function collectFolderIds(items, set) {
 }
 
 export default function App() {
+  const [theme, setTheme] = useState(() => localStorage.getItem('b-postman-theme') || 'light')
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    () => localStorage.getItem('b-postman-sidebar-collapsed') === '1'
+  )
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const saved = Number(localStorage.getItem('b-postman-sidebar-width'))
+    return Number.isFinite(saved) && saved >= 220 ? saved : 300
+  })
   const [online, setOnline] = useState(false)
   const [dataPath, setDataPath] = useState('')
   const [sideTab, setSideTab] = useState('collections')
@@ -44,13 +48,16 @@ export default function App() {
   const [draft, setDraft] = useState(null)
   const [dirty, setDirty] = useState(false)
   const [response, setResponse] = useState(null)
+  const [sentRequest, setSentRequest] = useState(null)
   const [sending, setSending] = useState(false)
   const [expandedFolders, setExpandedFolders] = useState(() => new Set())
+  const [expandedCollections, setExpandedCollections] = useState(() => new Set())
   const [settings, setSettings] = useState({ activeEnvironmentId: null })
   const [envSummaries, setEnvSummaries] = useState([])
-  const [selectedEnv, setSelectedEnv] = useState(null)
+  const [envDetails, setEnvDetails] = useState({})
+  const [expandedEnvironments, setExpandedEnvironments] = useState(() => new Set())
   const [activeEnv, setActiveEnv] = useState(null)
-  const [envDirty, setEnvDirty] = useState(false)
+  const [dirtyEnvId, setDirtyEnvId] = useState(null)
   const [history, setHistory] = useState([])
   const [modal, setModal] = useState(null)
   const [toast, setToast] = useState('')
@@ -78,20 +85,23 @@ export default function App() {
 
       const full = {}
       const folderIds = new Set()
+      const collectionIds = new Set()
       for (const c of cols) {
         full[c.id] = await api.getCollection(c.id)
         collectFolderIds(full[c.id].items || [], folderIds)
+        collectionIds.add(c.id)
       }
       setCollections(full)
       setExpandedFolders(folderIds)
+      setExpandedCollections(collectionIds)
 
       if (sett.activeEnvironmentId) {
         try {
           const env = await api.getEnvironment(sett.activeEnvironmentId)
-          setSelectedEnv(env)
+          setEnvDetails((prev) => ({ ...prev, [env.id]: env }))
+          setExpandedEnvironments(new Set([env.id]))
           setActiveEnv(env)
         } catch {
-          setSelectedEnv(null)
           setActiveEnv(null)
         }
       }
@@ -103,6 +113,41 @@ export default function App() {
   useEffect(() => {
     loadBoot()
   }, [loadBoot])
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    localStorage.setItem('b-postman-theme', theme)
+  }, [theme])
+
+  useEffect(() => {
+    localStorage.setItem('b-postman-sidebar-collapsed', sidebarCollapsed ? '1' : '0')
+  }, [sidebarCollapsed])
+
+  useEffect(() => {
+    localStorage.setItem('b-postman-sidebar-width', String(sidebarWidth))
+  }, [sidebarWidth])
+
+  const onResizeSidebarStart = (event) => {
+    if (sidebarCollapsed) return
+    event.preventDefault()
+    const startX = event.clientX
+    const startWidth = sidebarWidth
+
+    const onMove = (moveEvent) => {
+      const next = Math.min(560, Math.max(220, startWidth + (moveEvent.clientX - startX)))
+      setSidebarWidth(next)
+    }
+
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      document.body.classList.remove('resizing-sidebar')
+    }
+
+    document.body.classList.add('resizing-sidebar')
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
 
   const activeVariables = useMemo(() => activeEnv?.variables || [], [activeEnv])
 
@@ -128,6 +173,11 @@ export default function App() {
       full[c.id] = await api.getCollection(c.id)
     }
     setCollections(full)
+    setExpandedCollections((prev) => {
+      const next = new Set(prev)
+      for (const c of cols) next.add(c.id)
+      return next
+    })
   }
 
   const refreshEnvs = async () => {
@@ -140,6 +190,7 @@ export default function App() {
     setDraft(structuredClone(item))
     setDirty(false)
     setResponse(null)
+    setSentRequest(null)
   }
 
   const onDraftChange = (next) => {
@@ -166,17 +217,19 @@ export default function App() {
 
   const onSend = async () => {
     if (!resolved) return
+    const snapshot = structuredClone(resolved)
     setSending(true)
     setResponse(null)
+    setSentRequest(snapshot)
     try {
       const result = await api.proxy({
-        name: resolved.name,
-        method: resolved.method,
-        url: resolved.url,
-        params: resolved.params,
-        headers: resolved.headers,
-        auth: resolved.auth,
-        body: resolved.body,
+        name: snapshot.name,
+        method: snapshot.method,
+        url: snapshot.url,
+        params: snapshot.params,
+        headers: snapshot.headers,
+        auth: snapshot.auth,
+        body: snapshot.body,
       })
       setResponse(result)
       setHistory(await api.getHistory())
@@ -263,21 +316,29 @@ export default function App() {
       const file = input.files?.[0]
       if (!file) return
       try {
-        const text = await file.text()
-        const json = JSON.parse(text)
-        if (json.info && json.item) {
-          await api.importPostman(json)
-        } else if (json.schemaVersion && json.items) {
-          await api.createCollection({
-            name: json.name,
-            description: json.description,
-            items: json.items,
-          })
-        } else {
-          throw new Error('Unrecognized collection format')
-        }
+        showToast('Importing…')
+        const result = await api.importFile(file)
         await refreshCollections()
-        showToast('Imported collection')
+        await refreshEnvs()
+        const sett = await api.getSettings()
+        setSettings(sett)
+        if (sett.activeEnvironmentId) {
+          const env = await api.getEnvironment(sett.activeEnvironmentId)
+          setEnvDetails((prev) => ({ ...prev, [env.id]: env }))
+          setExpandedEnvironments(new Set([env.id]))
+          setActiveEnv(env)
+        }
+        if (result.environment?.id) {
+          setEnvDetails((prev) => ({ ...prev, [result.environment.id]: result.environment }))
+          setExpandedEnvironments((prev) => new Set(prev).add(result.environment.id))
+        }
+        const kindLabel =
+          result.kind === 'openapi'
+            ? 'OpenAPI/Swagger'
+            : result.kind === 'postman'
+              ? 'Postman'
+              : 'B Postman'
+        showToast(`Imported ${kindLabel} collection${result.environment ? ' + environment' : ''}`)
       } catch (err) {
         alert(err.message || 'Import failed')
       }
@@ -294,18 +355,47 @@ export default function App() {
     })
   }
 
-  const onSelectEnv = async (id) => {
-    if (envDirty && !window.confirm('Discard environment changes?')) return
-    setSelectedEnv(await api.getEnvironment(id))
-    setEnvDirty(false)
+  const onToggleCollection = (id) => {
+    setExpandedCollections((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
   }
 
-  const onSaveEnv = async () => {
-    if (!selectedEnv) return
-    const saved = await api.saveEnvironment(selectedEnv.id, selectedEnv)
-    setSelectedEnv(saved)
+  const onToggleEnvironment = async (id) => {
+    const isOpen = expandedEnvironments.has(id)
+    if (isOpen) {
+      if (dirtyEnvId === id && !window.confirm('Discard unsaved environment changes?')) return
+      setExpandedEnvironments((prev) => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
+      if (dirtyEnvId === id) setDirtyEnvId(null)
+      return
+    }
+
+    if (!envDetails[id]) {
+      const env = await api.getEnvironment(id)
+      setEnvDetails((prev) => ({ ...prev, [id]: env }))
+    }
+    setExpandedEnvironments((prev) => new Set(prev).add(id))
+  }
+
+  const onChangeEnvironment = (env) => {
+    setEnvDetails((prev) => ({ ...prev, [env.id]: env }))
+    setDirtyEnvId(env.id)
+  }
+
+  const onSaveEnv = async (id) => {
+    const current = envDetails[id]
+    if (!current) return
+    const saved = await api.saveEnvironment(id, current)
+    setEnvDetails((prev) => ({ ...prev, [id]: saved }))
     if (settings.activeEnvironmentId === saved.id) setActiveEnv(saved)
-    setEnvDirty(false)
+    if (dirtyEnvId === id) setDirtyEnvId(null)
     await refreshEnvs()
     showToast('Environment saved')
   }
@@ -313,7 +403,8 @@ export default function App() {
   const onActivateEnv = async (id) => {
     const sett = await api.saveSettings({ activeEnvironmentId: id })
     setSettings(sett)
-    const env = await api.getEnvironment(id)
+    const env = envDetails[id] || (await api.getEnvironment(id))
+    setEnvDetails((prev) => ({ ...prev, [id]: env }))
     setActiveEnv(env)
     showToast('Active environment set')
   }
@@ -328,14 +419,25 @@ export default function App() {
       ],
     })
     await refreshEnvs()
-    setSelectedEnv(env)
-    setEnvDirty(false)
+    setEnvDetails((prev) => ({ ...prev, [env.id]: env }))
+    setExpandedEnvironments((prev) => new Set(prev).add(env.id))
+    setDirtyEnvId(null)
   }
 
   const onDeleteEnv = async (id) => {
     if (!window.confirm('Delete this environment file?')) return
     await api.deleteEnvironment(id)
-    if (selectedEnv?.id === id) setSelectedEnv(null)
+    setEnvDetails((prev) => {
+      const next = { ...prev }
+      delete next[id]
+      return next
+    })
+    setExpandedEnvironments((prev) => {
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
+    if (dirtyEnvId === id) setDirtyEnvId(null)
     if (settings.activeEnvironmentId === id) {
       setSettings(await api.saveSettings({ activeEnvironmentId: null }))
       setActiveEnv(null)
@@ -376,6 +478,7 @@ export default function App() {
     setDraft(null)
     setDirty(false)
     setResponse(null)
+    setSentRequest(null)
   }
 
   return (
@@ -386,8 +489,8 @@ export default function App() {
             <BrandMark />
           </div>
           <div className="brand-copy">
-            <div className="brand-name">API Messenger</div>
-            <div className="brand-tag">Local API client · collections on your filesystem</div>
+            <div className="brand-name">B Postman</div>
+            <div className="brand-tag">Local API client</div>
           </div>
         </div>
         <div className="topbar-actions">
@@ -398,6 +501,16 @@ export default function App() {
           <span className="pill" title="Active environment">
             Env: {activeEnv?.name || 'None'}
           </span>
+          <button
+            type="button"
+            className="theme-toggle"
+            onClick={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}
+            title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+            aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+          >
+            <span aria-hidden>{theme === 'dark' ? '☀' : '◐'}</span>
+            {theme === 'dark' ? 'Light' : 'Dark'}
+          </button>
           <button type="button" className="btn btn-sm" onClick={onImportPostman}>
             Import
           </button>
@@ -412,60 +525,149 @@ export default function App() {
         </div>
       </header>
 
-      <div className="workspace">
-        <aside className="sidebar">
-          <div className="sidebar-tabs">
-            {[
-              ['collections', 'Collections'],
-              ['environments', 'Environments'],
-              ['history', 'History'],
-            ].map(([id, label]) => (
+      <div
+        className={`workspace ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}
+        style={{ '--sidebar': sidebarCollapsed ? '52px' : `${sidebarWidth}px` }}
+      >
+        <aside className={`sidebar ${sidebarCollapsed ? 'is-collapsed' : ''}`}>
+          {sidebarCollapsed ? (
+            <div className="sidebar-rail">
               <button
-                key={id}
                 type="button"
-                className={`sidebar-tab ${sideTab === id ? 'active' : ''}`}
-                onClick={() => setSideTab(id)}
+                className="sidebar-rail-btn sidebar-toggle-btn"
+                onClick={() => setSidebarCollapsed(false)}
+                title="Expand menu"
+                aria-label="Expand menu"
               >
-                {label}
+                ☰
               </button>
-            ))}
-          </div>
-          <div className="sidebar-body">
-            {sideTab === 'collections' && (
-              <CollectionTree
-                collections={treeCollections}
-                selectedId={draft?.id}
-                onSelectRequest={onSelectRequest}
-                expandedFolders={expandedFolders}
-                onToggleFolder={onToggleFolder}
-                onNewRequest={onNewRequest}
-                onNewFolder={onNewFolder}
-                onRenameCollection={onRenameCollection}
-                onDeleteCollection={onDeleteCollection}
-                onExportCollection={onExportCollection}
-              />
-            )}
-            {sideTab === 'environments' && (
-              <EnvironmentsPanel
-                environments={envSummaries}
-                activeId={settings.activeEnvironmentId}
-                selectedEnv={selectedEnv}
-                onSelect={onSelectEnv}
-                onActivate={onActivateEnv}
-                onChangeVariables={(env) => {
-                  setSelectedEnv(env)
-                  setEnvDirty(true)
+              <button
+                type="button"
+                className={`sidebar-rail-btn ${sideTab === 'collections' ? 'active' : ''}`}
+                onClick={() => {
+                  setSideTab('collections')
+                  setSidebarCollapsed(false)
                 }}
-                onSave={onSaveEnv}
-                onCreate={onCreateEnv}
-                onDelete={onDeleteEnv}
-                dirty={envDirty}
+                title="Collections"
+              >
+                C
+              </button>
+              <button
+                type="button"
+                className={`sidebar-rail-btn ${sideTab === 'environments' ? 'active' : ''}`}
+                onClick={async () => {
+                  setSideTab('environments')
+                  setSidebarCollapsed(false)
+                  if (settings.activeEnvironmentId && !expandedEnvironments.has(settings.activeEnvironmentId)) {
+                    const envId = settings.activeEnvironmentId
+                    if (!envDetails[envId]) {
+                      const env = await api.getEnvironment(envId)
+                      setEnvDetails((prev) => ({ ...prev, [envId]: env }))
+                    }
+                    setExpandedEnvironments((prev) => new Set(prev).add(envId))
+                  }
+                }}
+                title="Environments"
+              >
+                E
+              </button>
+              <button
+                type="button"
+                className={`sidebar-rail-btn ${sideTab === 'history' ? 'active' : ''}`}
+                onClick={() => {
+                  setSideTab('history')
+                  setSidebarCollapsed(false)
+                }}
+                title="History"
+              >
+                H
+              </button>
+            </div>
+          ) : (
+            <>
+              <div className="sidebar-tabs">
+                <button
+                  type="button"
+                  className="sidebar-toggle-btn"
+                  onClick={() => setSidebarCollapsed(true)}
+                  title="Collapse menu"
+                  aria-label="Collapse menu"
+                >
+                  ☰
+                </button>
+                {[
+                  ['collections', 'Collections'],
+                  ['environments', 'Environments'],
+                  ['history', 'History'],
+                ].map(([id, label]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    className={`sidebar-tab ${sideTab === id ? 'active' : ''}`}
+                    onClick={async () => {
+                      setSideTab(id)
+                      if (id === 'environments' && settings.activeEnvironmentId) {
+                        const envId = settings.activeEnvironmentId
+                        if (!expandedEnvironments.has(envId)) {
+                          if (!envDetails[envId]) {
+                            const env = await api.getEnvironment(envId)
+                            setEnvDetails((prev) => ({ ...prev, [envId]: env }))
+                          }
+                          setExpandedEnvironments((prev) => new Set(prev).add(envId))
+                        }
+                      }
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div className="sidebar-body">
+                {sideTab === 'collections' && (
+                  <CollectionTree
+                    collections={treeCollections}
+                    selectedId={draft?.id}
+                    onSelectRequest={onSelectRequest}
+                    expandedFolders={expandedFolders}
+                    onToggleFolder={onToggleFolder}
+                    expandedCollections={expandedCollections}
+                    onToggleCollection={onToggleCollection}
+                    onNewRequest={onNewRequest}
+                    onNewFolder={onNewFolder}
+                    onRenameCollection={onRenameCollection}
+                    onDeleteCollection={onDeleteCollection}
+                    onExportCollection={onExportCollection}
+                  />
+                )}
+                {sideTab === 'environments' && (
+                  <EnvironmentsPanel
+                    environments={envSummaries}
+                    activeId={settings.activeEnvironmentId}
+                    envDetails={envDetails}
+                    expandedIds={expandedEnvironments}
+                    onToggle={onToggleEnvironment}
+                    onActivate={onActivateEnv}
+                    onChangeEnvironment={onChangeEnvironment}
+                    onSave={onSaveEnv}
+                    onCreate={onCreateEnv}
+                    onDelete={onDeleteEnv}
+                    dirtyId={dirtyEnvId}
+                  />
+                )}
+                {sideTab === 'history' && (
+                  <HistoryPanel history={history} onReplay={onReplay} onClear={onClearHistory} />
+                )}
+              </div>
+              <div
+                className="sidebar-resizer"
+                onMouseDown={onResizeSidebarStart}
+                title="Drag to resize sidebar"
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize sidebar"
               />
-            )}
-            {sideTab === 'history' && (
-              <HistoryPanel history={history} onReplay={onReplay} onClear={onClearHistory} />
-            )}
-          </div>
+            </>
+          )}
         </aside>
 
         <main className="main-pane">
@@ -477,7 +679,7 @@ export default function App() {
             onSave={onSaveRequest}
             dirty={dirty}
             responseSlot={
-              <ResponseViewer response={response} sending={sending} resolvedRequest={resolved} />
+              <ResponseViewer response={response} sending={sending} sentRequest={sentRequest} />
             }
           />
         </main>
@@ -489,8 +691,8 @@ export default function App() {
             position: 'fixed',
             right: 16,
             bottom: 16,
-            background: '#0b3c4a',
-            color: '#eef7f8',
+            background: '#0079c7',
+            color: '#ffffff',
             padding: '0.7rem 1rem',
             borderRadius: 12,
             boxShadow: '0 12px 30px rgba(0,0,0,0.2)',

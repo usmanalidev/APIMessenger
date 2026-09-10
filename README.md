@@ -1,10 +1,10 @@
-# API Messenger
+# B Postman
 
-Local Postman-style API client. Collections, environments, and history are saved as JSON files on disk — no database.
+Local Postman-style API client with a Bupa Arabia look. Collections, environments, and history are saved as JSON files on disk — no database.
 
 ## Quick start
 
-**Easiest (Windows):** double‑click `Start API Messenger.bat`
+**Easiest (Windows):** double‑click `Start B Postman.bat`
 
 It installs dependencies if needed, builds the UI once, starts the app, and opens **http://localhost:3847**.
 
@@ -36,8 +36,9 @@ Then open **http://localhost:5173**
 - **Environments** — `{{variables}}` in URL, headers, body, and auth (`data/environments/`)
 - **Send via proxy** — avoids browser CORS; timing, size, status, headers, body
 - **History** — last 200 calls in `data/history.json`
-- **Import / Export** — Postman collection JSON or native API Messenger files
-- **cURL view** — copy-ready command from the last resolved request
+- **Import / Export** — Postman collection JSON or native B Postman files
+- **cURL view** — full command for the request you sent
+- **Sidebar** — collapse/expand and drag to resize
 
 ## Scripts
 
@@ -53,8 +54,8 @@ Then open **http://localhost:5173**
 ## Share with another PC (Node required)
 
 1. On this machine, double‑click **`Make Share Package.bat`** (or run `npm run package:share`).
-2. Send **`share\API-Messenger-portable.zip`** (or the `share\API-Messenger` folder).
-3. On the other PC: unzip → double‑click **`Start API Messenger.bat`**.
+2. Send **`share\B-Postman-portable.zip`** (or the `share\B-Postman` folder).
+3. On the other PC: unzip → double‑click **`Start B Postman.bat`**.
 
 First run there installs only runtime packages (`npm install --omit=dev`). Collections stay in that copy’s `data\` folder.
 

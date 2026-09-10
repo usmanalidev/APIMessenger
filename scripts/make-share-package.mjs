@@ -5,8 +5,8 @@ import { execSync } from 'child_process'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(__dirname, '..')
-const outDir = path.join(root, 'share', 'API-Messenger')
-const zipPath = path.join(root, 'share', 'API-Messenger-portable.zip')
+const outDir = path.join(root, 'share', 'B-Postman')
+const zipPath = path.join(root, 'share', 'B-Postman-portable.zip')
 
 async function rmrf(p) {
   await fs.rm(p, { recursive: true, force: true })
@@ -30,21 +30,22 @@ async function writeJson(file, data) {
 console.log('Building UI…')
 execSync('npm run build', { cwd: root, stdio: 'inherit' })
 
-console.log('Assembling share package…')
-await rmrf(path.join(root, 'share'))
-await fs.mkdir(outDir, { recursive: true })
-await fs.mkdir(path.join(outDir, 'data', 'collections'), { recursive: true })
-await fs.mkdir(path.join(outDir, 'data', 'environments'), { recursive: true })
+console.log('Assembling B Postman share package…')
+const stagingDir = path.join(root, 'share', `B-Postman-build-${process.pid}`)
+await rmrf(stagingDir)
+await fs.mkdir(stagingDir, { recursive: true })
+await fs.mkdir(path.join(stagingDir, 'data', 'collections'), { recursive: true })
+await fs.mkdir(path.join(stagingDir, 'data', 'environments'), { recursive: true })
 
-await copyDir(path.join(root, 'server'), path.join(outDir, 'server'))
-await copyDir(path.join(root, 'dist'), path.join(outDir, 'dist'))
+await copyDir(path.join(root, 'server'), path.join(stagingDir, 'server'))
+await copyDir(path.join(root, 'dist'), path.join(stagingDir, 'dist'))
 
-await fs.writeFile(path.join(outDir, 'data', 'collections', '.gitkeep'), '')
-await fs.writeFile(path.join(outDir, 'data', 'environments', '.gitkeep'), '')
+await fs.writeFile(path.join(stagingDir, 'data', 'collections', '.gitkeep'), '')
+await fs.writeFile(path.join(stagingDir, 'data', 'environments', '.gitkeep'), '')
 
 const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'))
-await writeJson(path.join(outDir, 'package.json'), {
-  name: pkg.name,
+await writeJson(path.join(stagingDir, 'package.json'), {
+  name: 'b-postman',
   version: pkg.version,
   private: true,
   type: 'module',
@@ -54,20 +55,21 @@ await writeJson(path.join(outDir, 'package.json'), {
   dependencies: {
     cors: pkg.dependencies.cors,
     express: pkg.dependencies.express,
+    multer: pkg.dependencies.multer,
     uuid: pkg.dependencies.uuid,
   },
 })
 
 await fs.writeFile(
-  path.join(outDir, 'Start API Messenger.bat'),
+  path.join(stagingDir, 'Start B Postman.bat'),
   `@echo off
 setlocal
-title API Messenger
+title B Postman
 cd /d "%~dp0"
 
 echo.
-echo  API Messenger
-echo  -------------
+echo  B Postman
+echo  ---------
 echo.
 
 where node >nul 2>&1
@@ -96,6 +98,10 @@ if not exist "node_modules\\" (
     exit /b 1
   )
   echo.
+) else (
+  echo Ensuring runtime packages...
+  call npm install --omit=dev
+  echo.
 )
 
 if not exist "dist\\index.html" (
@@ -119,22 +125,24 @@ pause
 )
 
 await fs.writeFile(
-  path.join(outDir, 'README.txt'),
-  `API Messenger — portable package
-=================================
+  path.join(stagingDir, 'README.txt'),
+  `B Postman — portable package
+============================
 
 Requirements
 - Node.js 18+ (https://nodejs.org)
 - Windows recommended for the .bat launcher
 
 How to use on another PC
-1. Copy this whole folder (or unzip API-Messenger-portable.zip)
-2. Double-click "Start API Messenger.bat"
+1. Copy this whole folder (or unzip B-Postman-portable.zip)
+2. Double-click "Start B Postman.bat"
 3. First run installs npm packages, then opens http://localhost:3847
 
 Or from a terminal in this folder:
   npm install --omit=dev
   npm start
+
+Runtime dependencies include: express, cors, uuid, multer
 
 Data is stored locally in the data\\ folder next to this app
 (collections, environments, history). Nothing is uploaded.
@@ -143,6 +151,17 @@ Stop the app by closing the console window or pressing Ctrl+C.
 `,
   'utf8'
 )
+
+// Replace output folder if possible; otherwise keep staging and zip from staging
+try {
+  await rmrf(outDir)
+  await fs.rename(stagingDir, outDir)
+} catch {
+  console.warn('Could not replace locked share\\B-Postman folder. Packaging from staging copy.')
+  await rmrf(outDir)
+  await copyDir(stagingDir, outDir)
+  await rmrf(stagingDir)
+}
 
 console.log('Creating zip…')
 await rmrf(zipPath)
@@ -156,4 +175,4 @@ console.log('Share package ready:')
 console.log(`  Folder: ${outDir}`)
 console.log(`  Zip:    ${zipPath}`)
 console.log('')
-console.log('Send the zip (or the folder). Recipient needs Node.js, then runs Start API Messenger.bat')
+console.log('Send the zip (or the folder). Recipient needs Node.js, then runs Start B Postman.bat')

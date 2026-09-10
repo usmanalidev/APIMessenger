@@ -1,6 +1,7 @@
 import express from 'express'
 import cors from 'cors'
 import path from 'path'
+import multer from 'multer'
 import {
   initStorage,
   seedIfEmpty,
@@ -21,16 +22,26 @@ import {
   saveSettings,
 } from './storage.js'
 import { executeRequest } from './proxy.js'
+import {
+  detectImportKind,
+  convertOpenApi,
+  convertPostmanCollection,
+} from './importers.js'
 import { PATHS } from './paths.js'
 
 const app = express()
 const PORT = process.env.PORT || 3847
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 64 * 1024 * 1024 },
+})
 
 app.use(cors())
-app.use(express.json({ limit: '10mb' }))
+app.use(express.json({ limit: '64mb' }))
+app.use(express.urlencoded({ extended: true, limit: '64mb' }))
 
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, name: 'API Messenger', dataPath: PATHS.data })
+  res.json({ ok: true, name: 'B Postman', dataPath: PATHS.data })
 })
 
 app.get('/api/settings', async (_req, res) => {
@@ -173,13 +184,92 @@ app.post('/api/proxy', async (req, res) => {
   }
 })
 
+async function importDocument(json) {
+  const kind = detectImportKind(json)
+  let converted
+
+  if (kind === 'postman') {
+    converted = convertPostmanCollection(json)
+  } else if (kind === 'openapi') {
+    converted = convertOpenApi(json)
+  } else if (kind === 'native') {
+    converted = {
+      collection: {
+        name: json.name,
+        description: json.description,
+        items: json.items,
+      },
+      environment: null,
+    }
+  } else {
+    const err = new Error(
+      'Unrecognized format. Import a Postman collection, OpenAPI/Swagger JSON, or B Postman file.'
+    )
+    err.status = 400
+    throw err
+  }
+
+  const saved = await createCollection(converted.collection)
+  let environment = null
+  if (converted.environment) {
+    environment = await createEnvironment(converted.environment)
+    await saveSettings({ activeEnvironmentId: environment.id })
+  }
+
+  return { collection: saved, environment, kind }
+}
+
+app.post('/api/import', async (req, res) => {
+  try {
+    res.status(201).json(await importDocument(req.body))
+  } catch (err) {
+    res.status(err.status || 400).json({ error: err.message || 'Import failed' })
+  }
+})
+
+app.post('/api/import/file', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file?.buffer?.length) {
+      return res.status(400).json({ error: 'No file uploaded' })
+    }
+    const text = req.file.buffer.toString('utf8')
+    const json = JSON.parse(text)
+    res.status(201).json(await importDocument(json))
+  } catch (err) {
+    if (err instanceof SyntaxError) {
+      return res.status(400).json({ error: 'Invalid JSON file' })
+    }
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({ error: 'File too large. Max size is 64MB.' })
+    }
+    res.status(err.status || 400).json({ error: err.message || 'Import failed' })
+  }
+})
+
 app.post('/api/import/postman', async (req, res) => {
   try {
-    const collection = convertPostmanCollection(req.body)
-    const saved = await createCollection(collection)
-    res.status(201).json(saved)
+    const converted = convertPostmanCollection(req.body)
+    const saved = await createCollection(converted.collection)
+    let environment = null
+    if (converted.environment) {
+      environment = await createEnvironment(converted.environment)
+      await saveSettings({ activeEnvironmentId: environment.id })
+    }
+    res.status(201).json({ ...saved, environment })
   } catch (err) {
     res.status(400).json({ error: err.message || 'Invalid Postman collection' })
+  }
+})
+
+app.post('/api/import/openapi', async (req, res) => {
+  try {
+    const converted = convertOpenApi(req.body)
+    const saved = await createCollection(converted.collection)
+    const environment = await createEnvironment(converted.environment)
+    await saveSettings({ activeEnvironmentId: environment.id })
+    res.status(201).json({ collection: saved, environment })
+  } catch (err) {
+    res.status(400).json({ error: err.message || 'Invalid OpenAPI document' })
   }
 })
 
@@ -192,108 +282,10 @@ app.use((req, res, next) => {
   })
 })
 
-function convertPostmanCollection(pm) {
-  if (!pm || !pm.info) throw new Error('Missing Postman collection info')
-
-  const mapItem = (item) => {
-    if (item.item) {
-      return {
-        id: cryptoRandom(),
-        type: 'folder',
-        name: item.name || 'Folder',
-        children: item.item.map(mapItem),
-      }
-    }
-
-    const req = item.request || {}
-    const url = typeof req.url === 'string' ? req.url : req.url?.raw || ''
-    const method = (req.method || 'GET').toUpperCase()
-    const headers = (req.header || []).map((h) => ({
-      id: cryptoRandom(),
-      key: h.key || '',
-      value: h.value || '',
-      enabled: !h.disabled,
-    }))
-
-    let body = { mode: 'none', raw: '', rawType: 'json', formData: [], urlencoded: [] }
-    if (req.body) {
-      if (req.body.mode === 'raw') {
-        body = {
-          mode: 'raw',
-          raw: req.body.raw || '',
-          rawType: req.body.options?.raw?.language || 'json',
-          formData: [],
-          urlencoded: [],
-        }
-      } else if (req.body.mode === 'urlencoded') {
-        body = {
-          mode: 'urlencoded',
-          raw: '',
-          rawType: 'json',
-          formData: [],
-          urlencoded: (req.body.urlencoded || []).map((r) => ({
-            id: cryptoRandom(),
-            key: r.key || '',
-            value: r.value || '',
-            enabled: !r.disabled,
-          })),
-        }
-      } else if (req.body.mode === 'formdata') {
-        body = {
-          mode: 'formdata',
-          raw: '',
-          rawType: 'json',
-          formData: (req.body.formdata || []).map((r) => ({
-            id: cryptoRandom(),
-            key: r.key || '',
-            value: r.value || '',
-            enabled: !r.disabled,
-          })),
-          urlencoded: [],
-        }
-      }
-    }
-
-    let auth = { type: 'none' }
-    const a = req.auth || pm.auth
-    if (a?.type === 'bearer') {
-      auth = { type: 'bearer', token: a.bearer?.find?.((x) => x.key === 'token')?.value || a.bearer?.[0]?.value || '' }
-    } else if (a?.type === 'basic') {
-      auth = {
-        type: 'basic',
-        username: a.basic?.find?.((x) => x.key === 'username')?.value || '',
-        password: a.basic?.find?.((x) => x.key === 'password')?.value || '',
-      }
-    }
-
-    return {
-      id: cryptoRandom(),
-      type: 'request',
-      name: item.name || 'Request',
-      method,
-      url,
-      params: [],
-      headers,
-      auth,
-      body,
-    }
-  }
-
-  return {
-    name: pm.info.name || 'Imported Collection',
-    description: pm.info.description || 'Imported from Postman',
-    items: (pm.item || []).map(mapItem),
-  }
-}
-
-function cryptoRandom() {
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
-}
-
 await initStorage()
 await seedIfEmpty()
 
 app.listen(PORT, () => {
-  console.log(`API Messenger server → http://localhost:${PORT}`)
+  console.log(`B Postman server → http://localhost:${PORT}`)
   console.log(`Data folder           → ${PATHS.data}`)
 })
